@@ -40,11 +40,12 @@
     "postinstall": "prisma generate --schema prisma/schema.prisma",
     "vercel:build": "vercel build"
   },
-  "devDependencies": {
-    "concurrently": "^9.1.2",
-    "prisma": "^6.2.1"
-  },
   "dependencies": {
-    "@prisma/client": "^6.2.1"
-  }
+  "@prisma/client": "^6.2.1",
+  "prisma": "^6.2.1"
+},
+
+"devDependencies": {
+  "concurrently": "^9.1.2"
+}
 }
