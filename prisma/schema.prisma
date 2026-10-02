@@ -1,0 +1,872 @@
+// =============================================================================
+//  ARENA ESTUDOS ALEPA — schema PostgreSQL (Prisma ORM)
+//
+//  Decisões de modelagem pensadas no crescimento futuro:
+//   * tudo é multi-usuário e isolado por `userId` (permite planos, ranking,
+//     gamificação e exportação de dados sem reescrever tabelas);
+//   * conteúdo (matérias/assuntos/questões) é separado do progresso do aluno
+//     (UserProgress / Answer / DailyStat), então o banco de questões pode
+//     evoluir sem tocar no histórico;
+//   * ids são UUIDs — seguros para expor em URLs e sincronizar com o mobile;
+//   * `externalId` guarda o id do banco legado (ex.: "LP-001"), o que torna a
+//     importação das 1.704 questões idempotente.
+// =============================================================================
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" cobre a sua máquina; "rhel-openssl-3.0.x" é o Linux da Vercel.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  // Pooler de TRANSAÇÃO do Supabase (porta 6543) aguenta muitas funções
+  // serverless abrindo conexão ao mesmo tempo. Com pooler de SESSÃO (5432)
+  // também funciona — e é o que recomendamos para a Vercel.
+  //
+  // Sobre migrações: o `prisma migrate` NÃO funciona pelo pooler de transação.
+  // Se o seu DATABASE_URL for o pooler 6543, rode as migrações passando a
+  // conexão direta na hora (PowerShell):
+  //   $env:DATABASE_URL = "postgresql://postgres.<ref>:<SENHA>@db.<ref>.supabase.co:5432/postgres?sslmode=require"
+  //   npx prisma migrate deploy
+  // (Não usamos `directUrl` de propósito: ele obriga a variável DIRECT_URL a
+  // existir em TODO comando do Prisma — inclusive nos testes e no seu .env
+  // local — e quebraria o projeto para quem não usa pooler.)
+  url = env("DATABASE_URL")
+}
+
+// ============================== AUTENTICAÇÃO / ACESSO =========================
+
+/// Perfil do usuário (RBAC). Papéis de sistema não podem ser apagados.
+model Role {
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String       @unique // ADMIN | EDITOR | ALUNO
+  label       String
+  description String?
+  isSystem    Boolean      @default(false)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  users       User[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+/// Permissão granular. Ex.: "questions:create", "admin:users:block"
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  key         String           @unique
+  description String?
+  module      String // auth | users | questions | simulados | admin ...
+  createdAt   DateTime         @default(now()) @map("created_at")
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  id                String    @id @default(uuid()) @db.Uuid
+  name              String
+  email             String    @unique
+  emailNormalized   String    @unique @map("email_normalized")
+  passwordHash      String    @map("password_hash")
+  roleId            String    @map("role_id") @db.Uuid
+  role              Role      @relation(fields: [roleId], references: [id])
+
+  isActive          Boolean   @default(true) @map("is_active")
+  blockedAt         DateTime? @map("blocked_at")
+  blockedReason     String?   @map("blocked_reason")
+  emailVerifiedAt   DateTime? @map("email_verified_at")
+  mustChangePassword Boolean  @default(false) @map("must_change_password")
+  lastLoginAt       DateTime? @map("last_login_at")
+  passwordChangedAt DateTime? @map("password_changed_at")
+
+  // Auditoria de quem criou (admin/editor criando alunos)
+  createdById       String?   @map("created_by_id") @db.Uuid
+  createdBy         User?     @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers      User[]    @relation("UserCreatedBy")
+
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  deletedAt         DateTime? @map("deleted_at") // soft delete preserva histórico
+
+  setting           UserSetting?
+  refreshTokens     RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  answers           Answer[]
+  progress          UserProgress[]
+  favorites         Favorite[]
+  errorNotebook     ErrorNotebookItem[]
+  notes             QuestionNote[]
+  simulados         Simulado[]
+  studySessions     StudySession[]
+  dailyStats        DailyStat[]
+  theoryProgress    TheoryProgress[]
+  aiConversations   AiConversation[]
+  aiCredentials     AiUserCredential[]
+  createdQuestions  Question[]  @relation("QuestionAuthor")
+  auditLogs         AuditLog[]  @relation("AuditActor")
+  auditLogsTarget   AuditLog[]  @relation("AuditTarget")
+  loginAttempts     LoginAttempt[]
+  generatedBatches  AiGeneratedBatch[]
+  achievements      UserAchievement[]
+  trackProgress     StudyTrackProgress[]
+
+  @@index([roleId])
+  @@index([isActive])
+  @@map("users")
+}
+
+/// Preferências de estudo (era o S.config do legado).
+model UserSetting {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @unique @map("user_id") @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  dailyGoal     Int      @default(41) @map("daily_goal")
+  totalGoal     Int      @default(3000) @map("total_goal")
+  examDate      DateTime? @map("exam_date") @db.Date
+  examTimeMinutes Int    @default(240) @map("exam_time_minutes")
+  timezone      String   @default("America/Sao_Paulo")
+  theme         String   @default("dark")
+  onboardingDone Boolean @default(false) @map("onboarding_done")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("user_settings")
+}
+
+/// Refresh tokens (sessão revogável). Guardamos só o hash.
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique @map("token_hash")
+  userAgent  String?   @map("user_agent")
+  ip         String?
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  /// id do token que substituiu este na rotação (só auditoria, sem FK)
+  replacedById String? @map("replaced_by_id") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  ip        String?
+  userAgent String?   @map("user_agent")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+/// Controle de força bruta (login).
+model LoginAttempt {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String
+  ip        String?
+  userId    String?  @map("user_id") @db.Uuid
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  success   Boolean
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([email, createdAt])
+  @@index([ip, createdAt])
+  @@map("login_attempts")
+}
+
+/// Trilha de auditoria (toda ação administrativa passa por aqui).
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  targetId   String?  @map("target_id") @db.Uuid
+  target     User?    @relation("AuditTarget", fields: [targetId], references: [id], onDelete: SetNull)
+  action     String   // ex.: user.blocked, question.created
+  entity     String   // user | question | subject | role ...
+  entityId   String?  @map("entity_id")
+  ip         String?
+  userAgent  String?  @map("user_agent")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([actorId, createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+// ================================ CONTEÚDO ===================================
+
+/// Matéria (ex.: Língua Portuguesa). `code` = sigla do legado (LP, PL, DA...).
+model Subject {
+  id          String    @id @default(uuid()) @db.Uuid
+  code        String    @unique // LP, LE, INFO, RL ...
+  name        String
+  groupName   String?   @map("group_name") // Conhecimentos Básicos / Específicos
+  color       String    @default("#4f7dfb")
+  order       Int       @default(0)
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  topics      Topic[]
+  questions   Question[]
+  theoryItems TheoryItem[]
+  simuladoResults SimuladoResult[]
+  errorItems  ErrorNotebookItem[]
+  favorites   Favorite[]
+  trackItems  StudyTrackItem[]
+
+  @@map("subjects")
+}
+
+/// Assunto do edital, sempre ligado a uma matéria.
+model Topic {
+  id        String    @id @default(uuid()) @db.Uuid
+  subjectId String    @map("subject_id") @db.Uuid
+  subject   Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  name      String
+  slug      String
+  order     Int       @default(0)
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  questions Question[]
+  theoryItems TheoryItem[]
+  aiBatches  AiGeneratedBatch[]
+  trackItems StudyTrackItem[]
+
+  @@unique([subjectId, name])
+  @@index([subjectId])
+  @@map("topics")
+}
+
+enum QuestionOrigin {
+  CURATED    // banco curado migrado do legado
+  GENERATED  // gerador infinito
+  IMPORTED   // importada de prova antiga pelo usuário
+  AI         // criada por IA
+}
+
+enum Difficulty {
+  FACIL
+  MEDIA
+  DIFICIL
+}
+
+enum QuestionStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Question {
+  id          String         @id @default(uuid()) @db.Uuid
+  /// id original do banco legado (LP-001) — torna a importação idempotente
+  externalId  String?        @unique @map("external_id")
+  subjectId   String         @map("subject_id") @db.Uuid
+  subject     Subject        @relation(fields: [subjectId], references: [id])
+  topicId     String?        @map("topic_id") @db.Uuid
+  topic       Topic?         @relation(fields: [topicId], references: [id], onDelete: SetNull)
+
+  prompt      String         @db.Text
+  difficulty  Difficulty     @default(MEDIA)
+  year        Int?
+  /// banca / instituição (Fundação CETAP, Estilo CETAP, prova antiga...)
+  source      String?
+  /// base legal ("ref" do legado)
+  legalBasis  String?        @map("legal_basis") @db.Text
+  explanation String?        @db.Text // comentário
+  analysis    String?        @db.Text // análise alternativa por alternativa
+  origin      QuestionOrigin @default(CURATED)
+  status      QuestionStatus @default(PUBLISHED)
+  isOfficial  Boolean        @default(false) @map("is_official")
+
+  createdById String?        @map("created_by_id") @db.Uuid
+  createdBy   User?          @relation("QuestionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  options     QuestionOption[]
+  tags        QuestionTag[]
+  answers     Answer[]
+  progress    UserProgress[]
+  favorites   Favorite[]
+  errorItems  ErrorNotebookItem[]
+  notes       QuestionNote[]
+  simuladoQuestions SimuladoQuestion[]
+  aiConversations   AiConversation[]
+  generatedBatchId  String? @map("generated_batch_id") @db.Uuid
+  generatedBatch    AiGeneratedBatch? @relation(fields: [generatedBatchId], references: [id], onDelete: SetNull)
+
+  @@index([subjectId, difficulty])
+  @@index([topicId])
+  @@index([origin, status])
+  @@map("questions")
+}
+
+model QuestionOption {
+  id         String   @id @default(uuid()) @db.Uuid
+  questionId String   @map("question_id") @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String   // A, B, C, D, E
+  text       String   @db.Text
+  order      Int
+  isCorrect  Boolean  @default(false) @map("is_correct")
+
+  answers    Answer[] @relation("AnswerChosenOption")
+  simuladoQuestions SimuladoQuestion[] @relation("SimuladoChosenOption")
+
+  @@unique([questionId, label])
+  @@index([questionId])
+  @@map("question_options")
+}
+
+model Tag {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String        @unique
+  questions QuestionTag[]
+
+  @@map("tags")
+}
+
+model QuestionTag {
+  questionId String   @map("question_id") @db.Uuid
+  tagId      String   @map("tag_id") @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  tag        Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([questionId, tagId])
+  @@map("question_tags")
+}
+
+/// Lote de questões geradas por IA (permite auditar e excluir em bloco).
+model AiGeneratedBatch {
+  id        String     @id @default(uuid()) @db.Uuid
+  userId    String     @map("user_id") @db.Uuid
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId   String?    @map("topic_id") @db.Uuid
+  topic     Topic?     @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  provider  String
+  model     String
+  prompt    String     @db.Text
+  count     Int        @default(0)
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  questions Question[]
+
+  @@map("ai_generated_batches")
+}
+
+/// Teoria de bolso (era o window.__TEORIA__ do legado).
+model TheoryItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  subjectId  String   @map("subject_id") @db.Uuid
+  subject    Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topicId    String?  @map("topic_id") @db.Uuid
+  topic      Topic?   @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  title      String
+  content    String   @db.Text
+  order      Int      @default(0)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  progress   TheoryProgress[]
+
+  @@index([subjectId])
+  @@map("theory_items")
+}
+
+model TheoryProgress {
+  id          String     @id @default(uuid()) @db.Uuid
+  userId      String     @map("user_id") @db.Uuid
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  theoryItemId String    @map("theory_item_id") @db.Uuid
+  theoryItem  TheoryItem @relation(fields: [theoryItemId], references: [id], onDelete: Cascade)
+  done        Boolean    @default(true)
+  readAt      DateTime?  @map("read_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  @@unique([userId, theoryItemId])
+  @@map("theory_progress")
+}
+
+// ================================ SIMULADOS ==================================
+
+enum SimuladoMode {
+  MANUAL    // usuário escolheu matérias/assuntos
+  RANDOM    // aleatório
+  ADAPTIVE  // baseado no desempenho
+  ERRORS    // gerado a partir do caderno de erros
+  AI        // gerado por IA
+}
+
+enum SimuladoStatus {
+  IN_PROGRESS
+  FINISHED
+  ABANDONED
+}
+
+model Simulado {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @map("user_id") @db.Uuid
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title          String
+  description    String?        @db.Text
+  mode           SimuladoMode   @default(MANUAL)
+  status         SimuladoStatus @default(IN_PROGRESS)
+
+  durationMinutes Int          @default(240) @map("duration_minutes")
+  shuffleOptions  Boolean      @default(false) @map("shuffle_options")
+  feedbackMode    String       @default("final") @map("feedback_mode") // final | imediato
+  difficulty      Difficulty?
+  questionCount   Int          @default(0) @map("question_count")
+
+  startedAt      DateTime       @default(now()) @map("started_at")
+  finishedAt     DateTime?      @map("finished_at")
+  timeSpentSeconds Int?         @map("time_spent_seconds")
+  deadlineAt     DateTime?      @map("deadline_at")
+
+  correctCount   Int            @default(0) @map("correct_count")
+  wrongCount     Int            @default(0) @map("wrong_count")
+  blankCount     Int            @default(0) @map("blank_count")
+  score          Decimal?       @db.Decimal(4, 2) // nota 0-10
+  percentCorrect Decimal?       @map("percent_correct") @db.Decimal(5, 2)
+
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  questions      SimuladoQuestion[]
+  results        SimuladoResult[]
+  answers        Answer[]
+  filters        SimuladoFilter[]
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@map("simulados")
+}
+
+/// Critérios usados para montar o simulado (reproduzibilidade / "refazer").
+model SimuladoFilter {
+  id         String   @id @default(uuid()) @db.Uuid
+  simuladoId String   @map("simulado_id") @db.Uuid
+  simulado   Simulado @relation(fields: [simuladoId], references: [id], onDelete: Cascade)
+  subjectId  String?  @map("subject_id") @db.Uuid
+  topicId    String?  @map("topic_id") @db.Uuid
+  difficulty Difficulty?
+  quantity   Int      @default(0)
+
+  @@index([simuladoId])
+  @@map("simulado_filters")
+}
+
+model SimuladoQuestion {
+  id            String          @id @default(uuid()) @db.Uuid
+  simuladoId    String          @map("simulado_id") @db.Uuid
+  simulado      Simulado        @relation(fields: [simuladoId], references: [id], onDelete: Cascade)
+  questionId    String          @map("question_id") @db.Uuid
+  question      Question        @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  /// posição congelada da alternativa correta no momento da prova
+  /// (guarda o embaralhamento para o gabarito não se perder)
+  correctLabelSnapshot String?  @map("correct_label_snapshot")
+  /// ordem de exibição das alternativas quando o simulado embaralha as opções.
+  /// Sem isso o gabarito se perderia ao recarregar a prova.
+  optionsSnapshot      Json?    @map("options_snapshot")
+  order         Int
+  chosenOptionId String?        @map("chosen_option_id") @db.Uuid
+  chosenOption  QuestionOption? @relation("SimuladoChosenOption", fields: [chosenOptionId], references: [id], onDelete: SetNull)
+  isCorrect     Boolean?        @map("is_correct")
+  isBlank       Boolean         @default(true) @map("is_blank")
+  isFlagged     Boolean         @default(false) @map("is_flagged")
+  timeSpentSeconds Int?         @map("time_spent_seconds")
+  answeredAt    DateTime?       @map("answered_at")
+
+  @@unique([simuladoId, questionId])
+  @@index([simuladoId])
+  @@map("simulado_questions")
+}
+
+/// Resultado agregado por matéria (era o `porMat` do legado).
+model SimuladoResult {
+  id         String   @id @default(uuid()) @db.Uuid
+  simuladoId String   @map("simulado_id") @db.Uuid
+  simulado   Simulado @relation(fields: [simuladoId], references: [id], onDelete: Cascade)
+  subjectId  String   @map("subject_id") @db.Uuid
+  subject    Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  total      Int      @default(0)
+  correct    Int      @default(0)
+  wrong      Int      @default(0)
+  blank      Int      @default(0)
+  percent    Decimal  @default(0) @db.Decimal(5, 2)
+  diagnosis  String?  // forte | atencao | prioridade
+
+  @@unique([simuladoId, subjectId])
+  @@index([simuladoId])
+  @@map("simulado_results")
+}
+
+// ============================ PROGRESSO / ESTUDO =============================
+
+enum AnswerSource {
+  TRAINING
+  SIMULADO
+  REVIEW
+  ERROR_BOOK
+  FAVORITES
+}
+
+/// Cada resposta registrada (fato bruto — alimenta todas as estatísticas).
+model Answer {
+  id             String       @id @default(uuid()) @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId     String       @map("question_id") @db.Uuid
+  question       Question     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  chosenOptionId String?      @map("chosen_option_id") @db.Uuid
+  chosenOption   QuestionOption? @relation("AnswerChosenOption", fields: [chosenOptionId], references: [id], onDelete: SetNull)
+  chosenLabel    String?      @map("chosen_label")
+  isCorrect      Boolean
+  timeSpentSeconds Int?       @map("time_spent_seconds")
+  source         AnswerSource @default(TRAINING)
+  studySessionId String?      @map("study_session_id") @db.Uuid
+  studySession   StudySession? @relation(fields: [studySessionId], references: [id], onDelete: SetNull)
+  simuladoId     String?      @map("simulado_id") @db.Uuid
+  simulado       Simulado?    @relation(fields: [simuladoId], references: [id], onDelete: SetNull)
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@index([userId, questionId])
+  @@index([questionId])
+  @@map("answers")
+}
+
+/// Estado Leitner por usuário+questão (era o S.resp do legado).
+model UserProgress {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId     String    @map("question_id") @db.Uuid
+  question       Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  attempts       Int       @default(0)
+  correctCount   Int       @default(0) @map("correct_count")
+  wrongCount     Int       @default(0) @map("wrong_count")
+  leitnerBox     Int       @default(0) @map("leitner_box") // 0..5
+  nextReviewAt   DateTime? @map("next_review_at")
+  lastAnsweredAt DateTime? @map("last_answered_at")
+  lastWasCorrect Boolean?  @map("last_was_correct")
+  averageSeconds Int?      @map("average_seconds")
+
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@unique([userId, questionId])
+  @@index([userId, nextReviewAt])
+  @@index([userId, leitnerBox])
+  @@map("user_progress")
+}
+
+/// Sessão de estudo (treino livre, gerador infinito, revisão).
+model StudySession {
+  id             String     @id @default(uuid()) @db.Uuid
+  userId         String     @map("user_id") @db.Uuid
+  user           User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title          String
+  kind           String     @default("TRAINING") // TRAINING | GENERATOR | REVIEW | ERROR_BOOK | FAVORITES
+  totalQuestions Int        @default(0) @map("total_questions")
+  answeredCount  Int        @default(0) @map("answered_count")
+  correctCount   Int        @default(0) @map("correct_count")
+  startedAt      DateTime   @default(now()) @map("started_at")
+  finishedAt     DateTime?  @map("finished_at")
+  durationSeconds Int?      @map("duration_seconds")
+  metadata       Json?
+
+  answers        Answer[]
+
+  @@index([userId, startedAt])
+  @@map("study_sessions")
+}
+
+/// Agregado diário (era o S.hist do legado) — alimenta heatmap, streak e metas.
+model DailyStat {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      DateTime @db.Date
+  questions Int      @default(0)
+  correct   Int      @default(0)
+  /// minutos estudados com 2 casas decimais (sessões curtas não "zeram")
+  minutes   Decimal  @default(0) @db.Decimal(10, 2)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+  @@map("daily_stats")
+}
+
+model Favorite {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId String   @map("question_id") @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  subjectId  String?  @map("subject_id") @db.Uuid
+  subject    Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, questionId])
+  @@index([userId])
+  @@map("favorites")
+}
+
+model ErrorNotebookItem {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId     String    @map("question_id") @db.Uuid
+  question       Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  subjectId      String?   @map("subject_id") @db.Uuid
+  subject        Subject?  @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  note           String?   @db.Text
+  errorCount     Int       @default(1) @map("error_count")
+  reviewCount    Int       @default(0) @map("review_count")
+  lastErrorAt    DateTime? @map("last_error_at")
+  resolvedAt     DateTime? @map("resolved_at") // some do caderno quando resolvida
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@unique([userId, questionId])
+  @@index([userId, resolvedAt])
+  @@map("error_notebook")
+}
+
+/// Anotações pessoais por questão (era o S.notas do legado).
+model QuestionNote {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId String   @map("question_id") @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  content    String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, questionId])
+  @@map("question_notes")
+}
+
+// ==================================== IA =====================================
+
+/// Catálogo de provedores (espelha o PROVEDORES do legado, agora no servidor).
+model AiProvider {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique // hf | gemini | groq | openai ...
+  name        String
+  kind        String   // openai | gemini | anthropic | custom
+  baseUrl     String?  @map("base_url")
+  modelsUrl   String?  @map("models_url")
+  defaultModel String? @map("default_model")
+  models      Json?    // lista sugerida
+  isFree      Boolean  @default(false) @map("is_free")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  credentials AiUserCredential[]
+  conversations AiConversation[]
+
+  @@map("ai_providers")
+}
+
+/// Chave de IA de cada usuário, cifrada em repouso (AES-256-GCM).
+model AiUserCredential {
+  id           String     @id @default(uuid()) @db.Uuid
+  userId       String     @map("user_id") @db.Uuid
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  providerId   String     @map("provider_id") @db.Uuid
+  provider     AiProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  apiKeyEnc    String?    @map("api_key_enc")
+  model        String?
+  baseUrl      String?    @map("base_url")
+  isEnabled    Boolean    @default(true) @map("is_enabled")
+  validatedAt  DateTime?  @map("validated_at")
+  lastError    String?    @map("last_error") @db.Text
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  @@unique([userId, providerId])
+  @@map("ai_user_credentials")
+}
+
+enum AiFeature {
+  CHAT
+  QUESTION_EXPLANATION
+  ERROR_EXPLANATION
+  SUMMARY
+  GENERATE_QUESTIONS
+  STUDY_HELP
+  REVIEW_SUGGESTION
+  GENERATE_SIMULADO
+}
+
+model AiConversation {
+  id          String     @id @default(uuid()) @db.Uuid
+  userId      String     @map("user_id") @db.Uuid
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String?
+  feature     AiFeature  @default(CHAT)
+  providerId  String?    @map("provider_id") @db.Uuid
+  provider    AiProvider? @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  model       String?
+  questionId  String?    @map("question_id") @db.Uuid
+  question    Question?  @relation(fields: [questionId], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  messages    AiMessage[]
+
+  @@index([userId, createdAt])
+  @@map("ai_conversations")
+}
+
+enum AiMessageRole {
+  SYSTEM
+  USER
+  ASSISTANT
+}
+
+model AiMessage {
+  id             String         @id @default(uuid()) @db.Uuid
+  conversationId String         @map("conversation_id") @db.Uuid
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           AiMessageRole
+  content        String         @db.Text
+  providerKey    String?        @map("provider_key")
+  model          String?
+  promptTokens   Int?           @map("prompt_tokens")
+  completionTokens Int?         @map("completion_tokens")
+  latencyMs      Int?           @map("latency_ms")
+  errorMessage   String?        @map("error_message") @db.Text
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+// ============================== GAMIFICAÇÃO / RANKING ========================
+
+/// Catálogo de conquistas (definido pelo seed; o aluno só desbloqueia).
+model Achievement {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  name        String
+  description String   @db.Text
+  icon        String   @default("🏅")
+  /// tipo do critério avaliado no serviço (respostas, acertos, streak, simulados...)
+  criteria    String
+  /// valor necessário para desbloquear
+  target      Int
+  /// XP concedido ao desbloquear
+  xp          Int      @default(10)
+  order       Int      @default(0)
+  isActive    Boolean  @default(true) @map("is_active")
+
+  unlockedBy  UserAchievement[]
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  id            String      @id @default(uuid()) @db.Uuid
+  userId        String      @map("user_id") @db.Uuid
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String      @map("achievement_id") @db.Uuid
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  unlockedAt    DateTime    @default(now()) @map("unlocked_at")
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@map("user_achievements")
+}
+
+// ================================ TRILHAS DE ESTUDO ==========================
+
+/// Sequência guiada de estudo (ex.: "Semana 1 — Português + RLM").
+model StudyTrack {
+  id          String   @id @default(uuid()) @db.Uuid
+  slug        String   @unique
+  title       String
+  description String?  @db.Text
+  /// "iniciante" | "intermediario" | "avancado" (livre, usado só para exibir)
+  level       String   @default("iniciante")
+  order       Int      @default(0)
+  isActive    Boolean  @default(true) @map("is_active")
+
+  items       StudyTrackItem[]
+  progress    StudyTrackProgress[]
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("study_tracks")
+}
+
+model StudyTrackItem {
+  id          String     @id @default(uuid()) @db.Uuid
+  trackId     String     @map("track_id") @db.Uuid
+  track       StudyTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  title       String
+  description String?    @db.Text
+  /// meta de questões da etapa (usada para a barra de progresso)
+  goalQuestions Int      @default(20) @map("goal_questions")
+  subjectId   String?    @map("subject_id") @db.Uuid
+  subject     Subject?   @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  topicId     String?    @map("topic_id") @db.Uuid
+  topic       Topic?     @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  order       Int        @default(0)
+
+  progress    StudyTrackProgress[]
+
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  @@index([trackId, order])
+  @@map("study_track_items")
+}
+
+/// Etapa concluída por um usuário. Um registro por (usuário, etapa).
+model StudyTrackProgress {
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trackId    String         @map("track_id") @db.Uuid
+  track      StudyTrack     @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  itemId     String?        @map("item_id") @db.Uuid
+  item       StudyTrackItem? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  completedAt DateTime      @default(now()) @map("completed_at")
+
+  @@unique([userId, trackId, itemId])
+  @@index([userId, trackId])
+  @@map("study_track_progress")
+}

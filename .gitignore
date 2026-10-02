@@ -1,0 +1,43 @@
+# -------- dependências --------
+node_modules/
+.pnp
+.pnp.js
+
+# -------- builds --------
+dist/
+build/
+coverage/
+.vite/
+out/
+
+# -------- ambiente (NUNCA versionar segredos) --------
+.env
+.env.*
+!.env.example
+.env.local
+.env.development.local
+.env.production.local
+
+# -------- banco local --------
+.pgdata/
+*.sqlite
+*.sqlite-journal
+
+# -------- logs --------
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# -------- editores / SO --------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# -------- uploads temporários --------
+backend/uploads/
+tmp/

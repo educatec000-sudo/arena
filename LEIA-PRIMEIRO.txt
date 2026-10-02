@@ -1,0 +1,110 @@
+ATUALIZAÇÃO — Arena Estudos ALEPA
+=================================
+
+NOVO NESTE PACOTE: dá para publicar na Vercel
+---------------------------------------------
+O projeto agora sobe INTEIRO em um único projeto da Vercel: o site (Vite) é
+estático e a API (Express) roda como função serverless em /api/*. O banco
+continua sendo o seu PostgreSQL (Supabase etc.).
+
+Passo a passo completo (variáveis, migrações, limites, erros conhecidos):
+  docs\DEPLOY-VERCEL.md
+
+Resumo:
+  1) npx prisma migrate deploy   (rode na sua máquina; NUNCA migrate dev)
+  2) npm run db:seed
+  3) vercel --prod
+  4) abra https://SEU-PROJETO.vercel.app/api/health  ->  status ok, database ok
+
+Arquivos novos: api\index.js, vercel.json, .vercelignore
+
+NOVO NESTE PACOTE (além do visual e do gerador de questões)
+-----------------------------------------------------------
+0. RODÍZIO DE PROVEDORES: quando o provedor escolhido falha (sobrecarga, cota,
+   chave inválida, timeout), o backend chama o próximo que tiver chave, e assim
+   por diante. Ordem: groq, gemini, huggingface, openrouter, mistral, deepseek,
+   openai, anthropic, xai. Quem acabou de falhar fica 60 s no fim da fila, para
+   a próxima pergunta não esperar de novo os ~15 s da falha. O Ollama e o
+   "compatível com OpenAI" só entram se você escolher na mão.
+1. Gemini: o Google aposentou o modelo gemini-2.0-flash e a geração de questões
+   voltou a dar erro 502. O padrão agora é gemini-3.8-flash e, se algum provedor
+   descontinuar um modelo de novo, o backend consulta a lista de modelos ao
+   vivo, troca sozinho e grava o novo padrão — sem você precisar mexer em nada.
+2. Fim da rajada de 401 ao abrir o app com a sessão vencida: o app renova o
+   token ANTES de pedir os dados (antes ele tomava 401, renovava e repetia).
+3. Questões geradas por IA agora têm selo "gerada por IA", filtro por origem na
+   tela Treinar e trava contra duplicadas (a IA não consegue mais gravar uma
+   questão quase idêntica a uma que você já tem).
+
+
+O que mudou neste pacote
+------------------------
+1. Gerador de simulado com IA: corrigido (erro 500 "createSimulado is not a function").
+2. Visual: layout voltou ao formato do app antigo — barra superior fixa (logo +
+   badges + usuário) e abas horizontais embaixo dela, conteúdo centralizado em
+   1060px. Não existe mais a barra lateral esquerda nem a barra inferior.
+3. CSS blindado: as variáveis do tema (--bg, --card, --txt...) agora estão
+   TAMBÉM inline no index.html e todo var(--x) tem um valor literal de reserva.
+   Ou seja: mesmo que o arquivo global.css não carregue por qualquer motivo
+   (cache do navegador, extração incompleta, servidor antigo), o app continua
+   escuro em vez de ficar branco.
+
+COMO CONFERIR SE A ATUALIZAÇÃO PEGOU (faça sempre)
+--------------------------------------------------
+    cd D:\arena\arena-estudos
+    node scripts\verificar-atualizacao.mjs
+
+Ele lista o que está OK e o que ficou desatualizado. Se aparecer
+"DESATUALIZADO" ou "FALTANDO", o backend que sobe é o antigo — mesmo que o zip
+tenha sido extraído (o mais comum: o zip cria a pasta "arena-estudos" e, se
+você extrair DENTRO de D:\arena\arena-estudos, os arquivos novos ficam em
+D:\arena\arena-estudos\arena-estudos). Extraia um nível acima.
+
+Como instalar (Windows / PowerShell)
+------------------------------------
+1. PARE os terminais do Vite e da API (Ctrl+C nos dois). É importante parar
+   antes de extrair: se o arquivo global.css estiver aberto pelo Vite, o
+   Windows pode não deixar sobrescrevê-lo e o CSS antigo continua lá.
+2. Extraia este zip SOBRE a pasta D:\arena\arena-estudos (substituir arquivos).
+3. No PowerShell, dentro de D:\arena\arena-estudos:
+       npm install
+   (rode mesmo que já tenha rodado antes — garante que nada ficou faltando)
+4. Se quiser zerar qualquer cache do Vite:
+       Remove-Item -Recurse -Force node_modules\.vite
+5. Suba de novo:
+       npm run dev
+6. Abra http://localhost:5173 e dê um HARD RELOAD: Ctrl + Shift + R
+   (ou F12 -> clique com o botão direito no botão de atualizar ->
+    "Empty cache and hard reload").
+
+Como conferir que o CSS novo está valendo
+-----------------------------------------
+A) Abra no navegador: http://localhost:5173/src/styles/global.css
+   A primeira linha deve ser:  /* ======================================================
+   Se aparecer "Arena Estudos ALEPA — folha de estilo" solto na primeira linha,
+   o arquivo NÃO foi atualizado (extração falhou).
+
+B) Com o app aberto, aperte F12, vá em Console e cole:
+       getComputedStyle(document.documentElement).getPropertyValue('--bg')
+   Deve responder:  #080b13
+   E:
+       getComputedStyle(document.body).backgroundColor
+   Deve responder:  rgb(8, 11, 19)
+   Se vier vazio ou branco, o CSS não está sendo aplicado -> confira o item A.
+
+C) F12 -> aba Network -> marque "Disable cache" -> recarregue. Não deve
+   aparecer nenhuma linha vermelha (404/500). Se aparecer uma linha vermelha
+   para global.css, me mande o nome exato do arquivo e o status.
+
+Se ainda assim ficar branco
+---------------------------
+Me mande:
+  - a barra de endereço completa que você usa (é 5173? é 4000? outra?),
+  - o print da aba Console do F12 (F12 -> Console, a página aberta),
+  - o resultado dos dois comandos do item B.
+
+Banco de dados (Supabase) — não é preciso rodar nada para essa atualização
+--------------------------------------------------------------------------
+Nenhuma migration nova foi criada neste pacote. Se quiser garantir:
+      npx prisma migrate deploy
+      npm run db:generate

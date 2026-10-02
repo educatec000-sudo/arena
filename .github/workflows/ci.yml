@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+  workflow_dispatch:
+
+# Um único job por vez evita concorrência no banco de testes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ------------------------------------------------------------------ API ----
+  api:
+    name: API — migrations + testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: arena
+          POSTGRES_PASSWORD: arena_dev
+          POSTGRES_DB: arena_estudos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U arena -d arena_estudos_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=15
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://arena:arena_dev@127.0.0.1:5432/arena_estudos_test?schema=public
+      DATABASE_URL_TEST: postgresql://arena:arena_dev@127.0.0.1:5432/arena_estudos_test?schema=public
+      JWT_ACCESS_SECRET: ci-access-secret-com-mais-de-32-caracteres-1234567890
+      JWT_REFRESH_SECRET: ci-refresh-secret-com-mais-de-32-caracteres-1234567890
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      LOG_LEVEL: silent
+      PASSWORD_RESET_LOG_LINK: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Gerar Prisma Client
+        run: npx prisma generate
+
+      # Valida a(s) migração(ões) aplicando do zero — pega schema quebrado e
+      # migration que não roda em banco limpo.
+      - name: Aplicar migrações
+        run: npx prisma migrate deploy
+
+      - name: Conferir que o schema não divergiu das migrações
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$DATABASE_URL" --exit-code
+
+      - name: Testes da API
+        run: npm run test:api
+
+      - name: Lint
+        run: npm run lint --workspace backend
+        continue-on-error: true
+
+  # ------------------------------------------------------------------ WEB ----
+  web:
+    name: Web — typecheck, build e testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Typecheck (tsc)
+        run: npm run build --workspace frontend
+        env:
+          NODE_ENV: production
+
+      - name: Testes do frontend
+        run: npm run test:web
+
+  # --------------------------------------------------------------- DOCKER ----
+  docker:
+    name: Build das imagens Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [api, web]
+    if: github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build da imagem da API
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          tags: arena-estudos-api:ci
+
+      - name: Build da imagem do frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: false
+          tags: arena-estudos-web:ci

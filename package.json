@@ -1,0 +1,50 @@
+{
+  "name": "arena-estudos",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Arena Estudos ALEPA — plataforma de estudos para concursos (monorepo: frontend + backend + prisma)",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "db:generate": "prisma generate --schema prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:supabase": "prisma migrate deploy",
+    "db:reset": "prisma migrate reset --force",
+    "db:resolve": "prisma migrate resolve",
+    "db:seed": "node prisma/seed/index.js",
+    "db:seed:questions": "node scripts/import-legacy-questions.mjs",
+    "db:setup": "prisma generate --schema prisma/schema.prisma && prisma migrate deploy --schema prisma/schema.prisma && node prisma/seed/index.js",
+    "db:status": "prisma migrate status",
+    "db:studio": "prisma studio",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --workspace backend",
+    "dev:web": "npm run dev --workspace frontend",
+    "diagnose:ai": "node scripts/diagnose-ai.mjs",
+    "legacy:import": "node scripts/import-legacy-questions.mjs",
+    "legacy:import-progress": "node scripts/import-local-progress.mjs",
+    "lint": "npm run lint --workspace backend && npm run lint --workspace frontend",
+    "notify:reviews": "node scripts/send-review-reminders.mjs",
+    "start": "npm run start --workspace backend",
+    "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "test:api": "npm run test --workspace backend",
+    "test:web": "npm run test --workspace frontend",
+    "build:vercel": "prisma generate --schema prisma/schema.prisma && npm run build --workspace frontend",
+    "postinstall": "prisma generate --schema prisma/schema.prisma",
+    "vercel:build": "vercel build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "prisma": "^6.2.1"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.2.1"
+  }
+}

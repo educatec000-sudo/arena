@@ -1,0 +1,55 @@
+# =============================================================================
+#  Arena Estudos ALEPA — orquestração local (DESENVOLVIMENTO)
+#  docker compose up -d        -> sobe só o PostgreSQL
+#  docker compose --profile app up -d -> sobe banco + api + web
+# =============================================================================
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: arena-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arena
+      POSTGRES_PASSWORD: arena_dev
+      POSTGRES_DB: arena_estudos
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U arena -d arena_estudos']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    profiles: ['app']
+    build:
+      context: ./backend
+      target: production
+    container_name: arena-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://arena:arena_dev@postgres:5432/arena_estudos?schema=public
+      NODE_ENV: production
+    ports:
+      - '4000:4000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    profiles: ['app']
+    build:
+      context: ./frontend
+      target: production
+    container_name: arena-web
+    restart: unless-stopped
+    ports:
+      - '8080:80'
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
