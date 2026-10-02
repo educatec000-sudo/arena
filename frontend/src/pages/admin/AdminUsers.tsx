@@ -83,16 +83,9 @@ export default function AdminUsers() {
 
   const createMutation = useMutation({
     mutationFn: () => {
-      // A criação passa pelo módulo de users (ADMIN) via serviço de admin.
-      return fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      }).then(async (response) => {
-        const json = await response.json();
-        if (!response.ok) throw new Error(json?.error?.message || 'Não foi possível criar o usuário.');
-        return json.data;
-      });
+      // Passa pelo cliente http (que já anexa o token e resolve o endereço
+      // da API), em vez de um fetch direto em '/api'.
+      return adminService.createUser(form);
     },
     onSuccess: () => {
       setCreating(false);

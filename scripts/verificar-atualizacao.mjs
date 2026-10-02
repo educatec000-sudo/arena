@@ -81,6 +81,36 @@ const checks = [
     contem: 'vercel --prod',
   },
   {
+    nome: 'Cookie de sessão cross-site (COOKIE_SAMESITE)',
+    arquivo: 'backend/src/shared/tokens.js',
+    contem: 'sameSitePolicy',
+  },
+  {
+    nome: 'CORS aceitando curinga (previews da Vercel)',
+    arquivo: 'backend/src/config/security.js',
+    contem: 'originAllowed',
+  },
+  {
+    nome: 'Frontend apontando para API externa (VITE_API_URL)',
+    arquivo: 'frontend/src/services/http.ts',
+    contem: 'VITE_API_URL',
+  },
+  {
+    nome: 'Config da Vercel para o frontend (frontend/vercel.json)',
+    arquivo: 'frontend/vercel.json',
+    contem: 'outputDirectory',
+  },
+  {
+    nome: 'Blueprint do Render (render.yaml)',
+    arquivo: 'render.yaml',
+    contem: 'healthCheckPath',
+  },
+  {
+    nome: 'Guia de deploy Render + Vercel',
+    arquivo: 'docs/DEPLOY-RENDER-VERCEL.md',
+    contem: 'onrender.com',
+  },
+  {
     nome: 'Filtro de origem na tela de treino',
     arquivo: 'frontend/src/components/question/QuestionFilters.tsx',
     contem: 'Geradas por IA',

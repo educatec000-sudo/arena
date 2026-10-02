@@ -11,7 +11,18 @@ import type { ApiErrorBody } from '@/types';
  *  - converter erros da API em `ApiRequestError` com a mensagem em pt-BR.
  */
 
-const API_BASE = '/api';
+/**
+ * Endereço da API.
+ *
+ * Padrão: `/api` relativo — o mesmo domínio serve o site e a API (dev com proxy
+ * do Vite, ou deploy tudo-em-um). Quando o frontend mora em um domínio e a API
+ * em outro (ex.: site na Vercel + API no Render), defina `VITE_API_URL`
+ * apontando para a API inteira, COM o prefixo:
+ *
+ *     VITE_API_URL=https://arena-estudos-api.onrender.com/api
+ */
+const configuredBase = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+export const API_BASE = configuredBase ? configuredBase.replace(/\/+$/, '') : '/api';
 
 export class ApiRequestError extends Error {
   status: number;

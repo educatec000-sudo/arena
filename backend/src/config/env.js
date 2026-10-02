@@ -104,6 +104,10 @@ export const env = {
     jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
     refreshCookieName: process.env.REFRESH_COOKIE_NAME || 'arena_rt',
     cookieDomain: process.env.COOKIE_DOMAIN || undefined,
+    // none | lax | strict. Em produção o padrão é 'none': é o que permite o
+    // cookie de sessão viajar entre dois domínios (frontend na Vercel,
+    // API no Render). Se tudo estiver no mesmo domínio, use 'strict'.
+    cookieSameSite: (process.env.COOKIE_SAMESITE || '').toLowerCase() || undefined,
     bcryptRounds: Number(process.env.BCRYPT_ROUNDS || 12),
     // AES-256 exige 32 bytes em hexadecimal (64 caractéres)
     encryptionKey: required(process.env.ENCRYPTION_KEY, 'ENCRYPTION_KEY'),

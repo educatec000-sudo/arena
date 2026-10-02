@@ -34,6 +34,7 @@ export const adminService = {
   blockUser: (id: string, reason?: string) => http.post(`/admin/users/${id}/block`, { reason }),
   unblockUser: (id: string) => http.post(`/admin/users/${id}/unblock`),
   changeRole: (id: string, role: string) => http.patch(`/admin/users/${id}/role`, { role }),
+  createUser: (payload: Record<string, unknown>) => http.post<AdminUser>('/users', payload),
   deleteUser: (id: string) => http.delete(`/admin/users/${id}`),
 
   logs: (params: { page?: number; limit?: number; action?: string; entity?: string } = {}) =>

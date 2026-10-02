@@ -1,6 +1,30 @@
 ATUALIZAÇÃO — Arena Estudos ALEPA
 =================================
 
+NOVO NESTE PACOTE: backend no Render + frontend na Vercel
+---------------------------------------------------------
+Agora dá para publicar em dois serviços: a API (Node) no Render e o site
+(estático) na Vercel, cada um no lugar em que se sai melhor — sem o limite de
+60 s que a função serverless da Vercel impõe à cadeia de provedores de IA.
+
+Passo a passo completo:
+  docs\DEPLOY-RENDER-VERCEL.md
+
+Resumo:
+  RENDER (API)   New + -> Blueprint (o repo já tem render.yaml)
+                 Build:  npm install && npx prisma generate --schema prisma/schema.prisma
+                 Start:  node backend/src/server.js
+                 Health Check Path: /health      <- obrigatório
+                 COOKIE_SAMESITE=none            <- cookie cross-site
+  VERCEL (site)  Root Directory = frontend       <- o repo é um monorepo
+                 VITE_API_URL=https://arena-estudos-api.onrender.com/api
+                 (depois de criar a variável: Redeploy)
+
+  Antes de tudo: npx prisma migrate deploy  e  npm run db:seed  (na sua máquina)
+
+O modo "tudo na Vercel" continua disponível (api\index.js): deploy com Root
+Directory = raiz e SEM VITE_API_URL. Use um de cada vez.
+
 NOVO NESTE PACOTE: dá para publicar na Vercel
 ---------------------------------------------
 O projeto agora sobe INTEIRO em um único projeto da Vercel: o site (Vite) é

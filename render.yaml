@@ -1,0 +1,79 @@
+# =============================================================================
+#  ARENA ESTUDOS ALEPA — Blueprint do Render (só o backend)
+#
+#  Modo de deploy deste arquivo:
+#    frontend  -> Vercel  (estático, Root Directory = frontend)
+#    backend   -> Render  (Node, este serviço, na raiz do monorepo)
+#    banco     -> Supabase (fora do Render)
+#
+#  Como usar: Render -> New + -> Blueprint -> escolha o repositório.
+#  O Render lê este arquivo, cria o serviço e só pede as variáveis
+#  marcadas com `sync: false` (as que precisam do seu valor real).
+#
+#  Guia completo em português: docs/DEPLOY-RENDER-VERCEL.md
+# =============================================================================
+services:
+  - type: web
+    name: arena-estudos-api
+    runtime: node
+    # Oregon é a região do Render com a menor latência a partir do Brasil.
+    region: oregon
+    plan: free
+    branch: main
+
+    # O monorepo é instalado inteiro: o Prisma precisa do schema que fica na
+    # raiz (prisma/schema.prisma) e a API roda de backend/src/server.js.
+    buildCommand: npm install && npx prisma generate --schema prisma/schema.prisma
+    startCommand: node backend/src/server.js
+
+    # Sem isso o Render pinga "/" e recebe 404 -> marca o serviço como doente.
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Pooler de SESSÃO (5432) do Supabase. Se usar o de transação (6543),
+      # acrescente ?pgbouncer=true e rode as migrações com a URL direta.
+      - key: DATABASE_URL
+        sync: false
+
+      # Endereço do site na Vercel, sem barra no final.
+      # Aceita curinga: https://*.vercel.app libera os previews de PR também.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: APP_WEB_URL
+        sync: false
+
+      # Front e API em domínios diferentes => o cookie TEM que ser cross-site.
+      - key: COOKIE_SAMESITE
+        value: none
+      # Deixe COOKIE_DOMAIN vazio: domínios diferentes não compartilham cookie.
+      - key: COOKIE_DOMAIN
+        value: ""
+
+      # O Render gera os segredos sozinho (generateValue). Se você trocá-los
+      # depois, todo mundo é deslogado — o que é a reação correta a um vazamento.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      # ENCRYPTION_KEY precisa ser 64 caracteres hexadecimais, então não dá
+      # para gerar automático: você preenche na hora de criar o serviço.
+      - key: ENCRYPTION_KEY
+        sync: false
+
+      - key: AI_DEFAULT_PROVIDER
+        value: groq
+      # O servidor do Render não tem o limite de 60 s da Vercel, então a cadeia
+      # de provedores pode respirar. 0 = usa só o timeout por tentativa.
+      - key: AI_TOTAL_BUDGET_MS
+        value: "120000"
+      - key: AI_REQUEST_TIMEOUT_MS
+        value: "60000"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false

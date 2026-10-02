@@ -376,6 +376,35 @@ branco** — front e API no mesmo domínio dispensam os dois.
 Guia completo, com a tabela de variáveis, limites do plano Hobby e os erros
 conhecidos: **[docs/DEPLOY-VERCEL.md](docs/DEPLOY-VERCEL.md)**.
 
+### 10.2 Deploy dividido: API no Render + site na Vercel 🚀
+
+Cada um no serviço em que se sai melhor: o Node de pé no Render (sem o teto de
+60 s da função serverless) e o estático na Vercel. O banco continua no
+PostgreSQL gerenciado.
+
+```
+https://SEU-FRONT.vercel.app              → frontend/dist (Vercel)
+https://arena-estudos-api.onrender.com/api → API Express (Render)
+                                              └──► Postgres (Supabase)
+```
+
+O repositório já vem com `render.yaml` (Blueprint do backend) e
+`frontend/vercel.json`. O ponto crítico é que **front e API em domínios
+diferentes formam um cenário cross-site**, o que exige:
+
+- `VITE_API_URL=https://…onrender.com/api` na **Vercel** (e redeploy depois);
+- `CORS_ORIGINS=https://SEU-FRONT.vercel.app` e `COOKIE_SAMESITE=none` no
+  **Render** — sem isso o cookie de sessão não é enviado;
+- **Health Check Path = `/health`** no Render (na raiz a API responde 404).
+
+```powershell
+npx prisma migrate deploy   # da sua máquina, antes do primeiro deploy
+npm run db:seed
+```
+
+Passo a passo completo, com a tabela de variáveis, os tempos e os erros
+conhecidos: **[docs/DEPLOY-RENDER-VERCEL.md](docs/DEPLOY-RENDER-VERCEL.md)**.
+
 **Tudo junto com Docker:**
 ```bash
 docker compose --profile app up -d --build   # postgres + api + web
@@ -390,6 +419,7 @@ docker compose --profile app up -d --build   # postgres + api + web
 - [x] PostgreSQL + Prisma com migrações versionadas
 - [x] Autenticação completa com papéis ADMIN / EDITOR / ALUNO
 - [x] 1.704 questões, 319 assuntos e 63 teoria migrados do app antigo
+- [x] Deploy dividido: API no Render + site na Vercel (cookie cross-site, CORS com curinga)
 - [x] Deploy em um projeto Vercel (frontend estático + API serverless + Postgres externo)
 - [x] Treino, simulados (com timer e correção), caderno de erros, favoritos
 - [x] Dashboard de desempenho com gráficos (evolução, por matéria, por assunto, calor)
